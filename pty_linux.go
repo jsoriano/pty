@@ -11,47 +11,45 @@ import (
 )
 
 func open() (pty, tty *os.File, err error) {
-	const devPtmx = "/dev/ptmx"
-
-	fd, err := syscall.Open(devPtmx, os.O_RDWR, 0)
+	fd, err := syscall.Open("/dev/ptmx", syscall.O_RDWR|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, nil, err
 	}
+	p := os.NewFile(uintptr(fd), "/dev/ptmx")
 	// In case of error after this point, make sure we close the ptmx fd.
 	defer func() {
 		if err != nil {
-			_ = syscall.Close(fd) // Best effort.
+			_ = p.Close() // Best effort.
 		}
 	}()
 
-	sname, err := ptsname(fd)
+	sname, err := ptsname(p)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if err := unlockpt(fd); err != nil {
+	if err := unlockpt(p); err != nil {
 		return nil, nil, err
 	}
 
-	tfd, err := syscall.Open(sname, os.O_RDWR|syscall.O_NOCTTY, 0) //nolint:gosec // Expected Open from a variable.
+	t, err := os.OpenFile(sname, os.O_RDWR|syscall.O_NOCTTY, 0) //nolint:gosec // Expected Open from a variable.
 	if err != nil {
 		return nil, nil, err
 	}
-
-	return os.NewFile(uintptr(fd), devPtmx), os.NewFile(uintptr(tfd), sname), nil
+	return p, t, nil
 }
 
-func ptsname(fd int) (string, error) {
+func ptsname(f *os.File) (string, error) {
 	var n _C_uint
-	err := ioctl(uintptr(fd), syscall.TIOCGPTN, uintptr(unsafe.Pointer(&n))) //nolint:gosec // Expected unsafe pointer for Syscall call.
+	err := ioctl(f.Fd(), syscall.TIOCGPTN, uintptr(unsafe.Pointer(&n))) //nolint:gosec // Expected unsafe pointer for Syscall call.
 	if err != nil {
 		return "", err
 	}
 	return "/dev/pts/" + strconv.Itoa(int(n)), nil
 }
 
-func unlockpt(fd int) error {
+func unlockpt(f *os.File) error {
 	var u _C_int
 	// use TIOCSPTLCK with a pointer to zero to clear the lock
-	return ioctl(uintptr(fd), syscall.TIOCSPTLCK, uintptr(unsafe.Pointer(&u))) //nolint:gosec // Expected unsafe pointer for Syscall call.
+	return ioctl(f.Fd(), syscall.TIOCSPTLCK, uintptr(unsafe.Pointer(&u))) //nolint:gosec // Expected unsafe pointer for Syscall call.
 }
